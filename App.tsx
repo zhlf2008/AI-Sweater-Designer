@@ -131,8 +131,22 @@ const App: React.FC = () => {
       });
 
     } catch (e: any) {
-      console.error(e);
-      setErrorMsg(e.message || "生成失败，请检查 API Key 或重试");
+      console.error("Generation Error:", e);
+      let userMsg = "生成失败，请检查 API Key 或重试";
+      
+      // Robust error message extraction
+      const detailedMsg = e.message || JSON.stringify(e) || String(e);
+
+      // Check for specific API errors
+      if (detailedMsg.includes("429") || detailedMsg.includes("quota") || detailedMsg.includes("RESOURCE_EXHAUSTED")) {
+        userMsg = "API 配额已用尽 (429)。请休息片刻或检查您的 Google Cloud 账单。";
+      } else if (detailedMsg.includes("API_KEY")) {
+        userMsg = "API Key 无效，请检查环境配置。";
+      } else if (e.message) {
+        userMsg = e.message;
+      }
+
+      setErrorMsg(userMsg);
       setGenerationState(prev => ({ ...prev, isGenerating: false, progress: 0 }));
     } finally {
       clearInterval(interval);
@@ -292,7 +306,7 @@ const App: React.FC = () => {
                  {errorMsg ? (
                    <>
                     <AlertCircle size={64} className="mb-4 text-red-400 opacity-80" />
-                    <p className="font-medium text-red-500">{errorMsg}</p>
+                    <p className="font-medium text-red-500 max-w-md">{errorMsg}</p>
                    </>
                  ) : (
                    <>
