@@ -9,7 +9,8 @@ import {
   Maximize2,
   AlertCircle,
   X,
-  Zap
+  Zap,
+  Globe
 } from 'lucide-react';
 import { Config, Resolution, GenerationState } from './types';
 import { DEFAULT_CONFIG, STATIC_PROMPT_SUFFIX, RESOLUTIONS } from './constants';
@@ -106,7 +107,6 @@ const App: React.FC = () => {
   const handleEnhancePrompt = async () => {
     if (!prompt) return;
     setIsEnhancing(true);
-    // Pass config to get the API Key for enhancement
     const enhanced = await enhancePromptWithGemini(prompt, config);
     setPrompt(enhanced);
     setIsEnhancing(false);
@@ -123,12 +123,13 @@ const App: React.FC = () => {
     const interval = setInterval(() => {
       setGenerationState(prev => {
         if (prev.progress >= 90) return prev;
-        return { ...prev, progress: prev.progress + (config.apiProvider === 'huggingface' ? 2 : 5) };
+        // Adjust speed based on provider
+        const speed = config.apiProvider === 'gemini' ? 5 : 2; 
+        return { ...prev, progress: prev.progress + speed };
       });
     }, 500);
 
     try {
-      // Call unified generation service
       const imageUrl = await generateImage(prompt, resolution, usedSeed, config);
 
       setGenerationState({
@@ -146,10 +147,12 @@ const App: React.FC = () => {
 
       if (detailedMsg.includes("429") || detailedMsg.includes("RESOURCE_EXHAUSTED")) {
         userMsg = "API 配额已用尽。";
-      } else if (detailedMsg.includes("API Key")) {
-        userMsg = "API Key 无效或未配置，请在设置中检查。";
+      } else if (detailedMsg.includes("API Key") || detailedMsg.includes("Token")) {
+        userMsg = "API Key/Token 无效或未配置，请在设置中检查。";
       } else if (detailedMsg.includes("HF API Error")) {
-        userMsg = "Hugging Face 服务暂时不可用或超时，请稍后重试。";
+        userMsg = "Hugging Face 服务暂时不可用，请重试。";
+      } else if (detailedMsg.includes("ModelScope")) {
+        userMsg = "ModelScope 任务失败，请检查 Token 或网络。";
       } else {
         userMsg = detailedMsg.slice(0, 100);
       }
@@ -170,6 +173,15 @@ const App: React.FC = () => {
       link.click();
       document.body.removeChild(link);
     }
+  };
+
+  const getProviderName = () => {
+      switch(config.apiProvider) {
+          case 'gemini': return 'Google Gemini';
+          case 'huggingface': return 'Z-Image Turbo';
+          case 'modelscope': return 'ModelScope (魔搭)';
+          default: return '';
+      }
   };
 
   // Helper to parse aspect ratio for UI display
@@ -197,9 +209,12 @@ const App: React.FC = () => {
             </div>
             <h1 className="font-bold text-xl text-brand-800 tracking-tight">AI 毛衣设计师</h1>
           </div>
-          {config.apiProvider === 'huggingface' && (
-             <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
-               <Zap size={10} /> Z-Image
+          {config.apiProvider !== 'gemini' && (
+             <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold flex items-center gap-1 ${
+                 config.apiProvider === 'modelscope' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'
+             }`}>
+               {config.apiProvider === 'modelscope' ? <Globe size={10} /> : <Zap size={10} />}
+               {config.apiProvider === 'modelscope' ? '魔搭' : 'HF'}
              </span>
           )}
         </div>
@@ -299,7 +314,7 @@ const App: React.FC = () => {
           >
             <Settings size={18} /> 
             <span>维度与 API 配置</span>
-            {!config.userApiKey && !process.env.API_KEY && config.apiProvider === 'gemini' && (
+            {!config.userApiKey && !process.env.API_KEY && config.apiProvider !== 'huggingface' && (
               <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-pulse border-2 border-white"></span>
             )}
           </button>
@@ -345,7 +360,7 @@ const App: React.FC = () => {
                     <Palette size={64} className="mb-4 opacity-50" />
                     <p className="font-medium">准备生成</p>
                     <p className="text-sm mt-2 opacity-70">
-                      当前使用: {config.apiProvider === 'gemini' ? 'Google Gemini' : 'Z-Image Turbo'}
+                      当前使用: {getProviderName()}
                     </p>
                    </>
                  )}
@@ -363,8 +378,8 @@ const App: React.FC = () => {
                   />
                 </div>
                 <p className="text-brand-600 mt-4 text-sm font-medium animate-pulse">正在编织细节...</p>
-                {config.apiProvider === 'huggingface' && (
-                  <p className="text-xs text-brand-400 mt-1">( HF Space 排队中... )</p>
+                {config.apiProvider !== 'gemini' && (
+                  <p className="text-xs text-brand-400 mt-1">( Async Queue 排队中... )</p>
                 )}
               </div>
             )}
@@ -405,7 +420,7 @@ const App: React.FC = () => {
                  onClick={handleEnhancePrompt}
                  disabled={isEnhancing || !prompt}
                  className="absolute top-3 right-3 text-xs font-medium text-purple-600 bg-white/90 hover:bg-purple-50 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1 border border-purple-100 shadow-sm backdrop-blur-sm"
-                 title="使用 Gemini 优化提示词"
+                 title="使用 Gemini 优化提示词 (仅在配置了 Gemini Key 时有效)"
                >
                  {isEnhancing ? (
                     <span className="flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> 优化中...</span>

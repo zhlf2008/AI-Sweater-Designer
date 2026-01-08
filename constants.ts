@@ -3,6 +3,7 @@ import { Config } from './types';
 export const DEFAULT_CONFIG: Config = {
   apiProvider: 'gemini',
   userApiKey: '',
+  corsProxy: 'https://corsproxy.io/?', // Default public proxy
   steps: 8,
   timeShift: 3.0,
   categories: [

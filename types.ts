@@ -4,12 +4,13 @@ export interface Category {
   items: string[];
 }
 
-export type ApiProvider = 'gemini' | 'huggingface';
+export type ApiProvider = 'gemini' | 'huggingface' | 'modelscope';
 
 export interface Config {
   categories: Category[];
   apiProvider: ApiProvider;
   userApiKey: string; // User entered API Key
+  corsProxy: string; // CORS Proxy URL for ModelScope
   // Advanced settings for Z-Image/HF
   steps: number;
   timeShift: number;

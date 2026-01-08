@@ -1,10 +1,9 @@
 import { GoogleGenAI } from "@google/genai";
-import { Config, Resolution } from "../types";
+import { Config, Resolution } from "./types";
 
 // Helper to get the effective API Key (User Input > Env Var)
 const getApiKey = (config: Config) => {
-  const envKey = (typeof process !== 'undefined' && process.env) ? process.env.API_KEY : "";
-  return config.userApiKey || envKey || "";
+  return config.userApiKey || process.env.API_KEY || "";
 };
 
 // --- Gemini Implementation ---
@@ -22,16 +21,13 @@ export const enhancePromptWithGemini = async (basePrompt: string, config: Config
 
     const ai = getGeminiClient(apiKey);
     
-    // Limit base prompt to reasonable length before enhancement
-    const safePrompt = basePrompt.slice(0, 500);
-
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: `你是一位专业的时尚摄影师和AI绘画提示词专家。
       请优化以下毛衣设计提示词，加入高质量的艺术关键词、光影描述和材质细节，使其适合生成逼真的照片。
       请保持在80字以内。
       
-      输入提示词: "${safePrompt}"
+      输入提示词: "${basePrompt}"
       
       要求：
       1. 请使用中文输出。
@@ -50,7 +46,6 @@ export const enhancePromptWithGemini = async (basePrompt: string, config: Config
 const generateWithGemini = async (prompt: string, resolution: Resolution, apiKey: string): Promise<string> => {
     const ai = getGeminiClient(apiKey);
     
-    // Map resolution to supported aspect ratios for Imagen
     let aspectRatio = "1:1";
     if (resolution.includes("3:4") || resolution === "864x1152") aspectRatio = "3:4";
     else if (resolution.includes("4:3") || resolution === "1152x864") aspectRatio = "4:3";
@@ -181,16 +176,10 @@ const generateWithModelScope = async (
     const apiKey = getApiKey(config);
     if (!apiKey) throw new Error("ModelScope API Token is missing. Please configure it in Settings.");
 
-    // Fix resolution format for ModelScope (Standard usually expects "1024*1024")
-    // Ensure it is strictly in standard format, removing any extra whitespace
-    const modelScopeResolution = resolution.replace('x', '*').trim();
-
-    // Use built-in fallback if config is empty
-    const proxy = (config.corsProxy && config.corsProxy.trim()) ? config.corsProxy.trim() : "https://corsproxy.io/?";
-    const targetUrl = "https://api-inference.modelscope.cn/v1/images/generations";
-    
-    // Construct URL safely with encoding to prevent "Origin DNS error"
-    const url = `${proxy}${encodeURIComponent(targetUrl)}`;
+    const proxy = config.corsProxy || "";
+    const baseUrl = "https://api-inference.modelscope.cn/v1/images/generations";
+    // Ensure URL is correctly formed with proxy
+    const url = proxy ? `${proxy}${baseUrl}` : baseUrl;
 
     try {
         const response = await fetch(url, {
@@ -204,11 +193,10 @@ const generateWithModelScope = async (
             body: JSON.stringify({
                 model: "Tongyi-MAI/Z-Image-Turbo",
                 input: {
-                    // Truncate prompt to avoid 400 error (ModelScope limit is 2000, setting to 1024 to be safe)
-                    prompt: prompt ? prompt.slice(0, 1024).trim() : "Sweater design"
+                    prompt: prompt
                 },
                 parameters: {
-                    size: modelScopeResolution, 
+                    size: resolution,
                     n: 1,
                     seed: seed 
                 }
@@ -217,26 +205,12 @@ const generateWithModelScope = async (
 
         if (!response.ok) {
             const errText = await response.text();
-            
-            if (response.status === 403 || response.status === 404 || errText.includes("DNS")) {
-                 throw new Error("Proxy Error: Unable to connect to ModelScope via Proxy. Please check your network or try a different proxy in settings.");
-            }
-            
-            throw new Error(`ModelScope Error (${response.status}): ${errText.slice(0, 200)}`);
+            throw new Error(`ModelScope Error (${response.status}): ${errText}`);
         }
 
         const data = await response.json();
-        
-        // Handle direct synchronous return
-        if (data.output && data.output.results && data.output.results[0] && data.output.results[0].url) {
-             return data.output.results[0].url;
-        }
-
         const taskId = data.task_id;
-        if (!taskId) {
-            if (data.output_images && data.output_images.length > 0) return data.output_images[0];
-            throw new Error("Failed to start ModelScope task: No task_id returned.");
-        }
+        if (!taskId) throw new Error("Failed to start ModelScope task: No task_id returned.");
 
         // Poll for status
         let attempts = 0;
@@ -244,8 +218,7 @@ const generateWithModelScope = async (
             await new Promise(r => setTimeout(r, 2000));
             
             const taskBaseUrl = `https://api-inference.modelscope.cn/v1/tasks/${taskId}`;
-            // Construct task URL with proxy as well
-            const taskUrl = `${proxy}${encodeURIComponent(taskBaseUrl)}`;
+            const taskUrl = proxy ? `${proxy}${taskBaseUrl}` : taskBaseUrl;
 
             const taskRes = await fetch(taskUrl, {
                 method: "GET",
@@ -276,7 +249,7 @@ const generateWithModelScope = async (
         throw new Error("ModelScope generation timed out.");
     } catch (e: any) {
         if (e.name === 'TypeError' && e.message === 'Failed to fetch') {
-            throw new Error("Network Error: 连接被拦截. ModelScope 必须使用代理 (已内置 https://corsproxy.io/?). 请检查网络连接.");
+            throw new Error("ModelScope 连接被浏览器拦截 (CORS)。请在设置中配置 'CORS 代理' (如 https://corsproxy.io/?) 来解决此问题。");
         }
         throw e;
     }

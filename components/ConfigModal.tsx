@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { X, Plus, Trash2, Save, GripVertical, Layers, Key, CheckCircle, AlertTriangle, Cpu, Settings2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Plus, Trash2, Save, GripVertical, Layers, Key, CheckCircle, AlertTriangle, Cpu, Settings2, Globe, Network } from 'lucide-react';
 import { Config, Category, ApiProvider } from '../types';
+import { DEFAULT_CONFIG } from '../constants';
 
 interface ConfigModalProps {
   isOpen: boolean;
@@ -19,6 +20,18 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, config, onSa
   // Drag state
   const [draggedCatIndex, setDraggedCatIndex] = useState<number | null>(null);
   const [draggedItemIndex, setDraggedItemIndex] = useState<number | null>(null);
+
+  // Reset local config when modal opens
+  useEffect(() => {
+    if (isOpen) {
+        const mergedConfig = JSON.parse(JSON.stringify(config));
+        // Ensure proxy is set if missing (backward compatibility)
+        if (!mergedConfig.corsProxy && mergedConfig.apiProvider === 'modelscope') {
+            mergedConfig.corsProxy = DEFAULT_CONFIG.corsProxy;
+        }
+        setLocalConfig(mergedConfig);
+    }
+  }, [isOpen, config]);
 
   if (!isOpen) return null;
 
@@ -100,6 +113,15 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, config, onSa
   };
 
   const activeCategory = localConfig.categories[selectedCatIndex];
+  
+  const getKeyLabel = (p: ApiProvider) => {
+     switch(p) {
+         case 'gemini': return 'Google AI Studio API Key';
+         case 'huggingface': return 'Hugging Face Token (Optional)';
+         case 'modelscope': return 'ModelScope Access Token (Required)';
+         default: return 'API Key';
+     }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -158,11 +180,14 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, config, onSa
                         value={newCatName}
                         onChange={(e) => setNewCatName(e.target.value)}
                         placeholder="新建..." 
-                        className="flex-1 px-3 py-2 rounded-lg border border-brand-200 focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm"
+                        className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-brand-200 focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm"
+                        onKeyDown={(e) => e.key === 'Enter' && handleAddCategory()}
                       />
                       <button 
                         onClick={handleAddCategory}
-                        className="bg-brand-400 text-white p-2 rounded-lg hover:bg-brand-500 transition-colors"
+                        disabled={!newCatName.trim()}
+                        className="bg-brand-400 text-white p-2 rounded-lg hover:bg-brand-500 transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="添加分类"
                       >
                         <Plus size={18} />
                       </button>
@@ -210,13 +235,14 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, config, onSa
                         onChange={(e) => setNewItemName(e.target.value)}
                         placeholder="新建标签选项..." 
                         disabled={!activeCategory}
-                        className="flex-1 px-3 py-2 rounded-lg border border-brand-200 focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm disabled:opacity-50"
+                        className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-brand-200 focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm disabled:opacity-50"
                         onKeyDown={(e) => e.key === 'Enter' && handleAddItem()}
                       />
                       <button 
                         onClick={handleAddItem}
-                        disabled={!activeCategory}
-                        className="bg-brand-100 text-brand-700 p-2 rounded-lg hover:bg-brand-200 transition-colors disabled:opacity-50"
+                        disabled={!activeCategory || !newItemName.trim()}
+                        className="bg-brand-100 text-brand-700 p-2 rounded-lg hover:bg-brand-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                        title="添加标签"
                       >
                         <Plus size={18} />
                       </button>
@@ -275,29 +301,41 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, config, onSa
                       <h4 className="font-bold text-brand-800 flex items-center gap-2 mb-4">
                         <Cpu size={18} /> 模型服务商 (API Provider)
                       </h4>
-                      <div className="grid grid-cols-2 gap-4">
+                      <div className="grid grid-cols-3 gap-3">
                         <button
                           onClick={() => setLocalConfig(prev => ({ ...prev, apiProvider: 'gemini' }))}
-                          className={`p-4 rounded-xl border-2 transition-all flex flex-col gap-2 items-center text-center ${
+                          className={`p-3 rounded-xl border-2 transition-all flex flex-col gap-1 items-center text-center ${
                             localConfig.apiProvider === 'gemini' 
                             ? 'border-brand-400 bg-brand-50 text-brand-800' 
                             : 'border-gray-100 bg-white hover:border-brand-200 text-gray-500'
                           }`}
                         >
-                          <span className="font-bold text-lg">Google Gemini</span>
-                          <span className="text-xs opacity-70">Imagen 4.0 / Gemini Flash</span>
+                          <span className="font-bold text-sm">Google Gemini</span>
+                          <span className="text-[10px] opacity-70">Imagen 4.0</span>
                         </button>
 
                         <button
                           onClick={() => setLocalConfig(prev => ({ ...prev, apiProvider: 'huggingface' }))}
-                          className={`p-4 rounded-xl border-2 transition-all flex flex-col gap-2 items-center text-center ${
+                          className={`p-3 rounded-xl border-2 transition-all flex flex-col gap-1 items-center text-center ${
                             localConfig.apiProvider === 'huggingface' 
                             ? 'border-brand-400 bg-brand-50 text-brand-800' 
                             : 'border-gray-100 bg-white hover:border-brand-200 text-gray-500'
                           }`}
                         >
-                          <span className="font-bold text-lg">Hugging Face</span>
-                          <span className="text-xs opacity-70">Z-Image-Turbo (Gradio)</span>
+                          <span className="font-bold text-sm">Hugging Face</span>
+                          <span className="text-[10px] opacity-70">Z-Image (Gradio)</span>
+                        </button>
+
+                        <button
+                          onClick={() => setLocalConfig(prev => ({ ...prev, apiProvider: 'modelscope' }))}
+                          className={`p-3 rounded-xl border-2 transition-all flex flex-col gap-1 items-center text-center ${
+                            localConfig.apiProvider === 'modelscope' 
+                            ? 'border-brand-400 bg-brand-50 text-brand-800' 
+                            : 'border-gray-100 bg-white hover:border-brand-200 text-gray-500'
+                          }`}
+                        >
+                          <span className="font-bold text-sm">ModelScope</span>
+                          <span className="text-[10px] opacity-70">魔搭 Z-Image</span>
                         </button>
                       </div>
                    </div>
@@ -311,36 +349,62 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, config, onSa
                       <div className="space-y-4">
                         <div className="flex flex-col gap-2">
                            <label className="text-sm font-semibold text-gray-700">
-                             {localConfig.apiProvider === 'gemini' ? 'Google AI Studio API Key' : 'Hugging Face Token (Optional)'}
+                             {getKeyLabel(localConfig.apiProvider)}
                            </label>
                            <input 
                               type="password" 
                               value={localConfig.userApiKey}
                               onChange={(e) => setLocalConfig(prev => ({ ...prev, userApiKey: e.target.value }))}
-                              placeholder={localConfig.apiProvider === 'gemini' ? "在此输入您的 API Key 以覆盖默认设置" : "如需提高配额，请输入 HF Token"}
+                              placeholder={localConfig.apiProvider === 'gemini' ? "在此输入您的 API Key 以覆盖默认设置" : "请输入您的 Access Token"}
                               className="w-full px-4 py-3 rounded-lg border border-brand-200 focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm font-mono bg-gray-50"
                            />
                         </div>
 
                         {/* Status Indicator */}
-                        <div className={`flex items-center gap-2 text-sm p-3 rounded-lg ${hasEffectiveKey || localConfig.apiProvider === 'huggingface' ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
-                           {hasEffectiveKey || localConfig.apiProvider === 'huggingface' ? <CheckCircle size={16} /> : <AlertTriangle size={16} />}
+                        <div className={`flex items-center gap-2 text-sm p-3 rounded-lg ${
+                            (localConfig.apiProvider === 'huggingface' || hasEffectiveKey) ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'
+                        }`}>
+                           {(localConfig.apiProvider === 'huggingface' || hasEffectiveKey) ? <CheckCircle size={16} /> : <AlertTriangle size={16} />}
                            <span>
                              {localConfig.apiProvider === 'huggingface' && !hasEffectiveKey 
                                ? 'HF 模式可尝试免费使用，但建议配置 Token 以获得更稳定体验。' 
                                : hasEffectiveKey 
-                                 ? (localConfig.userApiKey ? '使用用户自定义 Key' : '使用系统环境变量 Key')
-                                 : '未检测到 Key，请在上方输入'}
+                                 ? (localConfig.userApiKey ? '使用用户自定义 Token/Key' : '使用系统环境变量 Key')
+                                 : '未检测到 Token，请在上方输入'}
                            </span>
                         </div>
                       </div>
                    </div>
 
-                   {/* 3. Advanced Settings (Z-Image Only) */}
-                   {localConfig.apiProvider === 'huggingface' && (
+                   {/* 3. CORS Proxy Configuration (Only for ModelScope) */}
+                   {localConfig.apiProvider === 'modelscope' && (
+                     <div className="bg-white border border-brand-200 rounded-xl p-6 shadow-sm animate-in fade-in">
+                        <h4 className="font-bold text-brand-800 flex items-center gap-2 mb-4">
+                          <Network size={18} /> 跨域代理 (CORS Proxy)
+                        </h4>
+                        <div className="space-y-2">
+                           <p className="text-xs text-gray-500 mb-2">
+                             ModelScope API 需要 CORS 代理。已为您内置默认代理，您也可以修改它。
+                           </p>
+                           <input 
+                              type="text" 
+                              value={localConfig.corsProxy || ''}
+                              onChange={(e) => setLocalConfig(prev => ({ ...prev, corsProxy: e.target.value }))}
+                              placeholder={DEFAULT_CONFIG.corsProxy}
+                              className="w-full px-4 py-3 rounded-lg border border-brand-200 focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm font-mono bg-gray-50"
+                           />
+                           <p className="text-xs text-brand-500">
+                             当前默认: <code>{DEFAULT_CONFIG.corsProxy}</code>
+                           </p>
+                        </div>
+                     </div>
+                   )}
+
+                   {/* 4. Advanced Settings (Z-Image / ModelScope) */}
+                   {(localConfig.apiProvider === 'huggingface' || localConfig.apiProvider === 'modelscope') && (
                      <div className="bg-white border border-brand-200 rounded-xl p-6 shadow-sm animate-in fade-in slide-in-from-bottom-2">
                         <h4 className="font-bold text-brand-800 flex items-center gap-2 mb-4">
-                          <Settings2 size={18} /> Z-Image 高级参数
+                          <Settings2 size={18} /> 高级参数 (Z-Image)
                         </h4>
                         <div className="grid grid-cols-2 gap-6">
                            <div className="space-y-2">
@@ -355,7 +419,7 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, config, onSa
                                onChange={(e) => setLocalConfig(prev => ({ ...prev, steps: parseInt(e.target.value) }))}
                                className="w-full accent-brand-500 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
                              />
-                             <p className="text-xs text-gray-500">建议 4-8 步。步数越多生成越慢，但不一定画质越好。</p>
+                             <p className="text-xs text-gray-500">建议 4-8 步。HF/ModelScope 模式下生效。</p>
                            </div>
 
                            <div className="space-y-2">
@@ -370,7 +434,7 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, config, onSa
                                onChange={(e) => setLocalConfig(prev => ({ ...prev, timeShift: parseFloat(e.target.value) }))}
                                className="w-full px-3 py-2 rounded-lg border border-brand-200 text-sm"
                              />
-                             <p className="text-xs text-gray-500">控制生成过程的采样调度，默认 3.0。</p>
+                             <p className="text-xs text-gray-500">仅 HF 模式生效。默认 3.0。</p>
                            </div>
                         </div>
                      </div>
