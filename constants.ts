@@ -1,6 +1,10 @@
 import { Config } from './types';
 
 export const DEFAULT_CONFIG: Config = {
+  apiProvider: 'gemini',
+  userApiKey: '',
+  steps: 8,
+  timeShift: 3.0,
   categories: [
     {
       id: 'color',
@@ -39,6 +43,12 @@ export const RESOLUTIONS = [
   { value: "1024x1024", label: "1024x1024 (1:1)" },
   { value: "864x1152", label: "864x1152 (3:4)" },
   { value: "1152x864", label: "1152x864 (4:3)" },
+  { value: "1248x832", label: "1248x832 (3:2)" },
+  { value: "832x1248", label: "832x1248 (2:3)" },
+  { value: "1280x720", label: "1280x720 (16:9)" },
+  { value: "720x1280", label: "720x1280 (9:16)" },
+  { value: "1344x576", label: "1344x576 (21:9)" },
+  { value: "576x1344", label: "576x1344 (9:21)" },
 ];
 
 export const STATIC_PROMPT_SUFFIX = "";

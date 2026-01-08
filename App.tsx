@@ -6,19 +6,32 @@ import {
   Wand2, 
   Loader2, 
   Palette, 
-  Sparkles,
   Maximize2,
   AlertCircle,
-  X
+  X,
+  Zap
 } from 'lucide-react';
-import { Config, Resolution, GenerationState, Category } from './types';
+import { Config, Resolution, GenerationState } from './types';
 import { DEFAULT_CONFIG, STATIC_PROMPT_SUFFIX, RESOLUTIONS } from './constants';
 import ConfigModal from './components/ConfigModal';
-import { enhancePromptWithGemini, generateImageWithGemini } from './services/geminiService';
+import { enhancePromptWithGemini, generateImage } from './services/generationService';
 
 const App: React.FC = () => {
   // --- State ---
-  const [config, setConfig] = useState<Config>(DEFAULT_CONFIG);
+  // Load config from localStorage if available to persist API keys
+  const [config, setConfig] = useState<Config>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('app_config');
+      if (saved) {
+        try {
+          // Merge saved config with default to ensure new fields exist
+          return { ...DEFAULT_CONFIG, ...JSON.parse(saved) };
+        } catch (e) { console.error(e); }
+      }
+    }
+    return DEFAULT_CONFIG;
+  });
+
   const [selections, setSelections] = useState<Record<string, string>>({});
   const [prompt, setPrompt] = useState('');
   const [resolution, setResolution] = useState<Resolution>("1024x1024");
@@ -36,8 +49,13 @@ const App: React.FC = () => {
     seed: 42
   });
 
-  // --- Helpers ---
+  // --- Effects ---
   
+  // Persist config
+  useEffect(() => {
+    localStorage.setItem('app_config', JSON.stringify(config));
+  }, [config]);
+
   // Initialize selections with first items
   useEffect(() => {
     const initialSelections: Record<string, string> = {};
@@ -46,13 +64,12 @@ const App: React.FC = () => {
         initialSelections[cat.id] = cat.items[0];
       }
     });
-    // Only update if adding new keys to avoid overwriting user changes
     if (Object.keys(initialSelections).length > 0) {
       setSelections(prev => ({ ...prev, ...initialSelections }));
     }
-  }, [config]);
+  }, [config.categories]); // Dependency on categories structure
 
-  // Construct prompt when selections change
+  // Construct prompt
   const constructPrompt = useCallback(() => {
     const parts = ["AI设计：一件精美毛衣"];
     config.categories.forEach(cat => {
@@ -62,9 +79,8 @@ const App: React.FC = () => {
     });
     const suffix = STATIC_PROMPT_SUFFIX ? "，" + STATIC_PROMPT_SUFFIX : "";
     setPrompt(parts.join("，") + suffix);
-  }, [config, selections]);
+  }, [config.categories, selections]);
 
-  // Trigger prompt construction when dependencies change
   useEffect(() => {
     constructPrompt();
   }, [selections, constructPrompt]);
@@ -90,7 +106,8 @@ const App: React.FC = () => {
   const handleEnhancePrompt = async () => {
     if (!prompt) return;
     setIsEnhancing(true);
-    const enhanced = await enhancePromptWithGemini(prompt);
+    // Pass config to get the API Key for enhancement
+    const enhanced = await enhancePromptWithGemini(prompt, config);
     setPrompt(enhanced);
     setIsEnhancing(false);
   };
@@ -106,44 +123,35 @@ const App: React.FC = () => {
     const interval = setInterval(() => {
       setGenerationState(prev => {
         if (prev.progress >= 90) return prev;
-        return { ...prev, progress: prev.progress + 5 };
+        return { ...prev, progress: prev.progress + (config.apiProvider === 'huggingface' ? 2 : 5) };
       });
     }, 500);
 
     try {
-      // Convert resolution to aspect ratio for Imagen
-      // 1024x1024 -> 1:1, 864x1152 -> 3:4, 1152x864 -> 4:3
-      let aspectRatio = "1:1";
-      if (resolution === "864x1152") aspectRatio = "3:4";
-      if (resolution === "1152x864") aspectRatio = "4:3";
-
-      const base64Image = await generateImageWithGemini(prompt, aspectRatio);
-
-      if (!base64Image) {
-        throw new Error("Generation returned empty result");
-      }
+      // Call unified generation service
+      const imageUrl = await generateImage(prompt, resolution, usedSeed, config);
 
       setGenerationState({
         isGenerating: false,
         progress: 100,
-        imageUrl: base64Image,
+        imageUrl: imageUrl,
         seed: usedSeed
       });
 
     } catch (e: any) {
       console.error("Generation Error:", e);
-      let userMsg = "生成失败，请检查 API Key 或重试";
+      let userMsg = "生成失败，请检查配置或网络";
       
-      // Robust error message extraction
-      const detailedMsg = e.message || JSON.stringify(e) || String(e);
+      const detailedMsg = e.message || String(e);
 
-      // Check for specific API errors
-      if (detailedMsg.includes("429") || detailedMsg.includes("quota") || detailedMsg.includes("RESOURCE_EXHAUSTED")) {
-        userMsg = "API 配额已用尽 (429)。请休息片刻或检查您的 Google Cloud 账单。";
-      } else if (detailedMsg.includes("API_KEY")) {
-        userMsg = "API Key 无效，请检查环境配置。";
-      } else if (e.message) {
-        userMsg = e.message;
+      if (detailedMsg.includes("429") || detailedMsg.includes("RESOURCE_EXHAUSTED")) {
+        userMsg = "API 配额已用尽。";
+      } else if (detailedMsg.includes("API Key")) {
+        userMsg = "API Key 无效或未配置，请在设置中检查。";
+      } else if (detailedMsg.includes("HF API Error")) {
+        userMsg = "Hugging Face 服务暂时不可用或超时，请稍后重试。";
+      } else {
+        userMsg = detailedMsg.slice(0, 100);
       }
 
       setErrorMsg(userMsg);
@@ -164,6 +172,17 @@ const App: React.FC = () => {
     }
   };
 
+  // Helper to parse aspect ratio for UI display
+  const getAspectRatioStyle = () => {
+    if (resolution === "1024x1024") return '1/1';
+    
+    // Parse w x h
+    const [w, h] = resolution.split('x').map(Number);
+    if (!isNaN(w) && !isNaN(h)) return `${w}/${h}`;
+    
+    return '1/1';
+  };
+
   return (
     <div className="flex h-screen w-full bg-brand-50 text-brand-900 font-sans overflow-hidden">
       
@@ -171,11 +190,18 @@ const App: React.FC = () => {
       <aside className="w-[360px] flex-shrink-0 flex flex-col border-r border-brand-200 bg-white/50 backdrop-blur-md">
         
         {/* Header */}
-        <div className="h-16 flex items-center px-6 border-b border-brand-100 bg-white">
-          <div className="w-8 h-8 rounded-lg bg-brand-400 flex items-center justify-center text-white mr-3">
-            <Palette size={20} />
+        <div className="h-16 flex items-center px-6 border-b border-brand-100 bg-white justify-between">
+          <div className="flex items-center">
+            <div className="w-8 h-8 rounded-lg bg-brand-400 flex items-center justify-center text-white mr-3">
+              <Palette size={20} />
+            </div>
+            <h1 className="font-bold text-xl text-brand-800 tracking-tight">AI 毛衣设计师</h1>
           </div>
-          <h1 className="font-bold text-2xl text-brand-800 tracking-tight">AI 毛衣设计师</h1>
+          {config.apiProvider === 'huggingface' && (
+             <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+               <Zap size={10} /> Z-Image
+             </span>
+          )}
         </div>
 
         {/* Scrollable Controls */}
@@ -200,7 +226,7 @@ const App: React.FC = () => {
                   <select
                     value={selections[cat.id] || ''}
                     onChange={(e) => handleSelectionChange(cat.id, e.target.value)}
-                    className="w-full appearance-none bg-white border border-brand-200 text-brand-800 py-3 px-4 pr-8 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent shadow-sm transition-all"
+                    className="w-full appearance-none bg-white border border-brand-200 text-brand-800 py-3 px-4 pr-8 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent shadow-sm transition-all text-sm"
                   >
                     {cat.items.map((item) => (
                       <option key={item} value={item}>{item}</option>
@@ -222,16 +248,17 @@ const App: React.FC = () => {
             
             <div className="space-y-2">
               <label className="text-sm font-semibold text-brand-700">画幅尺寸</label>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto custom-scrollbar p-1">
                 {RESOLUTIONS.map((res) => (
                   <button
                     key={res.value}
                     onClick={() => setResolution(res.value as Resolution)}
-                    className={`text-xs py-2 px-1 rounded-lg border transition-all ${
+                    className={`text-xs py-2 px-2 rounded-lg border transition-all truncate ${
                       resolution === res.value 
                       ? 'bg-brand-400 text-white border-brand-400 shadow-md' 
                       : 'bg-white text-brand-600 border-brand-200 hover:border-brand-300'
                     }`}
+                    title={res.label}
                   >
                     {res.label}
                   </button>
@@ -247,7 +274,7 @@ const App: React.FC = () => {
                    value={seedInput}
                    onChange={(e) => setSeedInput(e.target.value)}
                    disabled={isRandomSeed}
-                   className={`flex-1 bg-white border border-brand-200 text-brand-800 py-2 px-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-400 ${isRandomSeed ? 'opacity-50' : ''}`}
+                   className={`flex-1 bg-white border border-brand-200 text-brand-800 py-2 px-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm ${isRandomSeed ? 'opacity-50' : ''}`}
                  />
                  <button
                    onClick={() => setIsRandomSeed(!isRandomSeed)}
@@ -268,9 +295,13 @@ const App: React.FC = () => {
         <div className="p-6 border-t border-brand-100 bg-brand-50">
           <button 
             onClick={() => setIsConfigOpen(true)}
-            className="w-full py-3 flex items-center justify-center gap-2 text-brand-600 font-medium hover:text-brand-800 hover:bg-brand-100 rounded-xl transition-colors"
+            className="w-full py-3 flex items-center justify-center gap-2 text-brand-600 font-medium hover:text-brand-800 hover:bg-brand-100 rounded-xl transition-colors relative group"
           >
-            <Settings size={18} /> 维度配置管理
+            <Settings size={18} /> 
+            <span>维度与 API 配置</span>
+            {!config.userApiKey && !process.env.API_KEY && config.apiProvider === 'gemini' && (
+              <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-pulse border-2 border-white"></span>
+            )}
           </button>
         </div>
       </aside>
@@ -289,10 +320,11 @@ const App: React.FC = () => {
           </div>
 
           <div 
-            className="relative bg-white shadow-2xl shadow-brand-200/50 rounded-lg overflow-hidden transition-all duration-500 ease-in-out border border-brand-100"
+            className="relative bg-white shadow-2xl shadow-brand-200/50 rounded-lg overflow-hidden transition-all duration-500 ease-in-out border border-brand-100 flex items-center justify-center"
             style={{
-              width: resolution === "1024x1024" ? '60vh' : resolution === "1152x864" ? '70vh' : '50vh',
-              aspectRatio: resolution === "1024x1024" ? '1/1' : resolution === "1152x864" ? '4/3' : '3/4',
+              height: '80%',
+              maxWidth: '90%',
+              aspectRatio: getAspectRatioStyle(),
             }}
           >
             {generationState.imageUrl ? (
@@ -312,6 +344,9 @@ const App: React.FC = () => {
                    <>
                     <Palette size={64} className="mb-4 opacity-50" />
                     <p className="font-medium">准备生成</p>
+                    <p className="text-sm mt-2 opacity-70">
+                      当前使用: {config.apiProvider === 'gemini' ? 'Google Gemini' : 'Z-Image Turbo'}
+                    </p>
                    </>
                  )}
               </div>
@@ -328,6 +363,9 @@ const App: React.FC = () => {
                   />
                 </div>
                 <p className="text-brand-600 mt-4 text-sm font-medium animate-pulse">正在编织细节...</p>
+                {config.apiProvider === 'huggingface' && (
+                  <p className="text-xs text-brand-400 mt-1">( HF Space 排队中... )</p>
+                )}
               </div>
             )}
             
@@ -367,6 +405,7 @@ const App: React.FC = () => {
                  onClick={handleEnhancePrompt}
                  disabled={isEnhancing || !prompt}
                  className="absolute top-3 right-3 text-xs font-medium text-purple-600 bg-white/90 hover:bg-purple-50 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1 border border-purple-100 shadow-sm backdrop-blur-sm"
+                 title="使用 Gemini 优化提示词"
                >
                  {isEnhancing ? (
                     <span className="flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> 优化中...</span>

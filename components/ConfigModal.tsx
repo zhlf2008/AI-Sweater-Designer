@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { X, Plus, Trash2, Save, GripVertical, Layers, Key, CheckCircle, AlertTriangle, Cpu } from 'lucide-react';
-import { Config, Category } from '../types';
+import { X, Plus, Trash2, Save, GripVertical, Layers, Key, CheckCircle, AlertTriangle, Cpu, Settings2 } from 'lucide-react';
+import { Config, Category, ApiProvider } from '../types';
 
 interface ConfigModalProps {
   isOpen: boolean;
@@ -22,8 +22,10 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, config, onSa
 
   if (!isOpen) return null;
 
-  // Safe check for API Key existence
-  const hasApiKey = typeof process !== 'undefined' && process.env && process.env.API_KEY;
+  // Determine if we have a key (either entered by user or from env)
+  const envApiKey = typeof process !== 'undefined' && process.env ? process.env.API_KEY : '';
+  const effectiveKey = localConfig.userApiKey || envApiKey;
+  const hasEffectiveKey = !!effectiveKey;
 
   const handleAddCategory = () => {
     if (!newCatName.trim()) return;
@@ -33,6 +35,7 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, config, onSa
       items: []
     };
     setLocalConfig(prev => ({
+      ...prev,
       categories: [...prev.categories, newCat]
     }));
     setNewCatName('');
@@ -42,7 +45,7 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, config, onSa
   const handleDeleteCategory = (index: number) => {
     const newCats = [...localConfig.categories];
     newCats.splice(index, 1);
-    setLocalConfig({ categories: newCats });
+    setLocalConfig(prev => ({ ...prev, categories: newCats }));
     if (selectedCatIndex >= newCats.length) {
       setSelectedCatIndex(Math.max(0, newCats.length - 1));
     }
@@ -52,14 +55,14 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, config, onSa
     if (!newItemName.trim() || localConfig.categories.length === 0) return;
     const newCats = [...localConfig.categories];
     newCats[selectedCatIndex].items.push(newItemName);
-    setLocalConfig({ categories: newCats });
+    setLocalConfig(prev => ({ ...prev, categories: newCats }));
     setNewItemName('');
   };
 
   const handleDeleteItem = (itemIndex: number) => {
     const newCats = [...localConfig.categories];
     newCats[selectedCatIndex].items.splice(itemIndex, 1);
-    setLocalConfig({ categories: newCats });
+    setLocalConfig(prev => ({ ...prev, categories: newCats }));
   };
 
   const handleSave = () => {
@@ -68,53 +71,31 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, config, onSa
   };
 
   // --- Drag & Drop Handlers for Categories ---
-  const handleCatDragStart = (index: number) => {
-    setDraggedCatIndex(index);
-  };
-
-  const handleCatDragOver = (e: React.DragEvent) => {
-    e.preventDefault(); // Allow dropping
-  };
-
+  const handleCatDragStart = (index: number) => { setDraggedCatIndex(index); };
+  const handleCatDragOver = (e: React.DragEvent) => { e.preventDefault(); };
   const handleCatDrop = (dropIndex: number) => {
     if (draggedCatIndex === null || draggedCatIndex === dropIndex) return;
-    
     const newCats = [...localConfig.categories];
     const [movedCat] = newCats.splice(draggedCatIndex, 1);
     newCats.splice(dropIndex, 0, movedCat);
-    
-    // Adjust selected index
-    if (selectedCatIndex === draggedCatIndex) {
-      setSelectedCatIndex(dropIndex);
-    } else if (selectedCatIndex > draggedCatIndex && selectedCatIndex <= dropIndex) {
-      setSelectedCatIndex(selectedCatIndex - 1);
-    } else if (selectedCatIndex < draggedCatIndex && selectedCatIndex >= dropIndex) {
-      setSelectedCatIndex(selectedCatIndex + 1);
-    }
-    
-    setLocalConfig({ categories: newCats });
+    if (selectedCatIndex === draggedCatIndex) setSelectedCatIndex(dropIndex);
+    else if (selectedCatIndex > draggedCatIndex && selectedCatIndex <= dropIndex) setSelectedCatIndex(selectedCatIndex - 1);
+    else if (selectedCatIndex < draggedCatIndex && selectedCatIndex >= dropIndex) setSelectedCatIndex(selectedCatIndex + 1);
+    setLocalConfig(prev => ({ ...prev, categories: newCats }));
     setDraggedCatIndex(null);
   };
 
   // --- Drag & Drop Handlers for Items ---
-  const handleItemDragStart = (index: number) => {
-    setDraggedItemIndex(index);
-  };
-
-  const handleItemDragOver = (e: React.DragEvent) => {
-    e.preventDefault(); // Allow dropping
-  };
-
+  const handleItemDragStart = (index: number) => { setDraggedItemIndex(index); };
+  const handleItemDragOver = (e: React.DragEvent) => { e.preventDefault(); };
   const handleItemDrop = (dropIndex: number) => {
     if (draggedItemIndex === null || draggedItemIndex === dropIndex) return;
-    
     const newCats = [...localConfig.categories];
     const items = [...newCats[selectedCatIndex].items];
     const [movedItem] = items.splice(draggedItemIndex, 1);
     items.splice(dropIndex, 0, movedItem);
-    
     newCats[selectedCatIndex].items = items;
-    setLocalConfig({ categories: newCats });
+    setLocalConfig(prev => ({ ...prev, categories: newCats }));
     setDraggedItemIndex(null);
   };
 
@@ -122,7 +103,7 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, config, onSa
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[600px] flex flex-col overflow-hidden border border-brand-100">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[650px] flex flex-col overflow-hidden border border-brand-100">
         
         {/* Header */}
         <div className="flex justify-between items-center p-6 border-b border-brand-100 bg-brand-50">
@@ -286,81 +267,114 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, config, onSa
 
             {/* --- Tab: Environment --- */}
             {activeTab === 'env' && (
-               <div className="flex-1 p-8 bg-white overflow-y-auto">
-                 <div className="max-w-2xl mx-auto space-y-8">
+               <div className="flex-1 p-8 bg-white overflow-y-auto custom-scrollbar">
+                 <div className="max-w-2xl mx-auto space-y-6">
                    
-                   {/* Status Card */}
-                   <div className={`border rounded-xl p-6 ${hasApiKey ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'}`}>
-                     <div className="flex items-start gap-4">
-                        <div className={`p-3 rounded-full ${hasApiKey ? 'bg-green-100 text-green-600' : 'bg-amber-100 text-amber-600'}`}>
-                          {hasApiKey ? <CheckCircle size={24} /> : <AlertTriangle size={24} />}
+                   {/* 1. API Selection */}
+                   <div className="bg-white border border-brand-200 rounded-xl p-6 shadow-sm">
+                      <h4 className="font-bold text-brand-800 flex items-center gap-2 mb-4">
+                        <Cpu size={18} /> 模型服务商 (API Provider)
+                      </h4>
+                      <div className="grid grid-cols-2 gap-4">
+                        <button
+                          onClick={() => setLocalConfig(prev => ({ ...prev, apiProvider: 'gemini' }))}
+                          className={`p-4 rounded-xl border-2 transition-all flex flex-col gap-2 items-center text-center ${
+                            localConfig.apiProvider === 'gemini' 
+                            ? 'border-brand-400 bg-brand-50 text-brand-800' 
+                            : 'border-gray-100 bg-white hover:border-brand-200 text-gray-500'
+                          }`}
+                        >
+                          <span className="font-bold text-lg">Google Gemini</span>
+                          <span className="text-xs opacity-70">Imagen 4.0 / Gemini Flash</span>
+                        </button>
+
+                        <button
+                          onClick={() => setLocalConfig(prev => ({ ...prev, apiProvider: 'huggingface' }))}
+                          className={`p-4 rounded-xl border-2 transition-all flex flex-col gap-2 items-center text-center ${
+                            localConfig.apiProvider === 'huggingface' 
+                            ? 'border-brand-400 bg-brand-50 text-brand-800' 
+                            : 'border-gray-100 bg-white hover:border-brand-200 text-gray-500'
+                          }`}
+                        >
+                          <span className="font-bold text-lg">Hugging Face</span>
+                          <span className="text-xs opacity-70">Z-Image-Turbo (Gradio)</span>
+                        </button>
+                      </div>
+                   </div>
+
+                   {/* 2. API Key Configuration */}
+                   <div className="bg-white border border-brand-200 rounded-xl p-6 shadow-sm">
+                      <h4 className="font-bold text-brand-800 flex items-center gap-2 mb-4">
+                        <Key size={18} /> API 密钥配置
+                      </h4>
+                      
+                      <div className="space-y-4">
+                        <div className="flex flex-col gap-2">
+                           <label className="text-sm font-semibold text-gray-700">
+                             {localConfig.apiProvider === 'gemini' ? 'Google AI Studio API Key' : 'Hugging Face Token (Optional)'}
+                           </label>
+                           <input 
+                              type="password" 
+                              value={localConfig.userApiKey}
+                              onChange={(e) => setLocalConfig(prev => ({ ...prev, userApiKey: e.target.value }))}
+                              placeholder={localConfig.apiProvider === 'gemini' ? "在此输入您的 API Key 以覆盖默认设置" : "如需提高配额，请输入 HF Token"}
+                              className="w-full px-4 py-3 rounded-lg border border-brand-200 focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm font-mono bg-gray-50"
+                           />
                         </div>
-                        <div>
-                          <h3 className={`text-lg font-bold mb-1 ${hasApiKey ? 'text-green-800' : 'text-amber-800'}`}>
-                             {hasApiKey ? 'API Key 已配置' : 'API Key 未检测到'}
-                          </h3>
-                          <p className={`text-sm ${hasApiKey ? 'text-green-700' : 'text-amber-700'}`}>
-                            {hasApiKey 
-                              ? '系统已准备就绪，可以调用 AI 模型。' 
-                              : '您需要配置环境变量 API_KEY 才能生成图片。'}
-                          </p>
+
+                        {/* Status Indicator */}
+                        <div className={`flex items-center gap-2 text-sm p-3 rounded-lg ${hasEffectiveKey || localConfig.apiProvider === 'huggingface' ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
+                           {hasEffectiveKey || localConfig.apiProvider === 'huggingface' ? <CheckCircle size={16} /> : <AlertTriangle size={16} />}
+                           <span>
+                             {localConfig.apiProvider === 'huggingface' && !hasEffectiveKey 
+                               ? 'HF 模式可尝试免费使用，但建议配置 Token 以获得更稳定体验。' 
+                               : hasEffectiveKey 
+                                 ? (localConfig.userApiKey ? '使用用户自定义 Key' : '使用系统环境变量 Key')
+                                 : '未检测到 Key，请在上方输入'}
+                           </span>
+                        </div>
+                      </div>
+                   </div>
+
+                   {/* 3. Advanced Settings (Z-Image Only) */}
+                   {localConfig.apiProvider === 'huggingface' && (
+                     <div className="bg-white border border-brand-200 rounded-xl p-6 shadow-sm animate-in fade-in slide-in-from-bottom-2">
+                        <h4 className="font-bold text-brand-800 flex items-center gap-2 mb-4">
+                          <Settings2 size={18} /> Z-Image 高级参数
+                        </h4>
+                        <div className="grid grid-cols-2 gap-6">
+                           <div className="space-y-2">
+                             <div className="flex justify-between">
+                               <label className="text-sm font-semibold text-gray-700">迭代步数 (Steps)</label>
+                               <span className="text-xs font-mono bg-brand-100 text-brand-800 px-2 py-0.5 rounded">{localConfig.steps || 8}</span>
+                             </div>
+                             <input 
+                               type="range" 
+                               min="1" max="50" 
+                               value={localConfig.steps || 8}
+                               onChange={(e) => setLocalConfig(prev => ({ ...prev, steps: parseInt(e.target.value) }))}
+                               className="w-full accent-brand-500 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                             />
+                             <p className="text-xs text-gray-500">建议 4-8 步。步数越多生成越慢，但不一定画质越好。</p>
+                           </div>
+
+                           <div className="space-y-2">
+                             <div className="flex justify-between">
+                               <label className="text-sm font-semibold text-gray-700">时间偏移 (Time Shift)</label>
+                               <span className="text-xs font-mono bg-brand-100 text-brand-800 px-2 py-0.5 rounded">{localConfig.timeShift || 3.0}</span>
+                             </div>
+                             <input 
+                               type="number" 
+                               step="0.1"
+                               value={localConfig.timeShift || 3.0}
+                               onChange={(e) => setLocalConfig(prev => ({ ...prev, timeShift: parseFloat(e.target.value) }))}
+                               className="w-full px-3 py-2 rounded-lg border border-brand-200 text-sm"
+                             />
+                             <p className="text-xs text-gray-500">控制生成过程的采样调度，默认 3.0。</p>
+                           </div>
                         </div>
                      </div>
-                   </div>
-
-                   {/* API Info */}
-                   <div className="space-y-4">
-                     <h4 className="font-bold text-brand-800 flex items-center gap-2">
-                       <Cpu size={18} /> API 服务信息
-                     </h4>
-                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                       <div className="bg-brand-50 p-4 rounded-xl border border-brand-100">
-                         <span className="text-xs font-bold text-brand-400 uppercase tracking-wider block mb-1">Provider</span>
-                         <span className="font-semibold text-brand-900">Google Gemini API</span>
-                       </div>
-                       <div className="bg-brand-50 p-4 rounded-xl border border-brand-100">
-                         <span className="text-xs font-bold text-brand-400 uppercase tracking-wider block mb-1">Models</span>
-                         <div className="text-sm text-brand-800">
-                           <div>gemini-3-flash-preview (Text)</div>
-                           <div>imagen-4.0-generate-001 (Image)</div>
-                         </div>
-                       </div>
-                     </div>
-                   </div>
-
-                   {/* Instructions */}
-                   <div className="space-y-4">
-                     <h4 className="font-bold text-brand-800 flex items-center gap-2">
-                       <Key size={18} /> 配置指南
-                     </h4>
-                     <div className="bg-gray-50 border border-gray-200 rounded-xl overflow-hidden">
-                       <div className="border-b border-gray-200 px-4 py-2 bg-gray-100 text-xs font-semibold text-gray-500 uppercase">
-                         配置方法 (Environment Variable)
-                       </div>
-                       <div className="p-4 space-y-4 text-sm text-gray-700">
-                         <p>出于安全原因，API Key 必须通过环境变量注入，请勿直接在代码中输入。</p>
-                         
-                         <div>
-                           <strong className="text-gray-900 block mb-1">部署到 Cloudflare Pages:</strong>
-                           <ol className="list-decimal pl-5 space-y-1">
-                             <li>进入项目 <strong>Settings</strong> &gt; <strong>Environment variables</strong></li>
-                             <li>添加变量名: <code className="bg-gray-200 px-1 rounded text-red-600">API_KEY</code></li>
-                             <li>变量值: 粘贴您的 Google AI Studio API Key</li>
-                             <li>重新部署项目以生效。</li>
-                           </ol>
-                         </div>
-
-                         <div>
-                           <strong className="text-gray-900 block mb-1">本地运行 (Local):</strong>
-                           <ul className="list-disc pl-5 space-y-1">
-                             <li>在项目根目录创建 <code className="bg-gray-200 px-1 rounded">.env</code> 文件</li>
-                             <li>添加内容: <code className="bg-gray-200 px-1 rounded text-blue-600">API_KEY=您的密钥...</code></li>
-                             <li>或者在启动命令前添加: <code className="bg-gray-200 px-1 rounded">export API_KEY=...</code></li>
-                           </ul>
-                         </div>
-                       </div>
-                     </div>
-                   </div>
+                   )}
 
                  </div>
                </div>
