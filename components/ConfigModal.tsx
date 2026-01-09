@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { X, Plus, Trash2, Save, GripVertical, Layers, Key, CheckCircle, AlertTriangle, Cpu, Settings2, Globe, Network } from 'lucide-react';
-import { Config, Category, ApiProvider } from '../types';
+import { X, Plus, Trash2, Save, GripVertical, Layers, Key, CheckCircle, AlertTriangle, Cpu, Settings2, Globe, Network, Zap, Cloud, Link, Loader2, Play } from 'lucide-react';
+import { Config, Category, ApiProvider, VerificationStatus } from '../types';
 import { DEFAULT_CONFIG } from '../constants';
+import { verifyConnection } from '../services/generationService';
 
 interface ConfigModalProps {
   isOpen: boolean;
@@ -17,6 +18,9 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, config, onSa
   const [newCatName, setNewCatName] = useState('');
   const [newItemName, setNewItemName] = useState('');
   
+  // Verification State
+  const [verifying, setVerifying] = useState<Record<string, VerificationStatus>>({});
+  
   // Drag state
   const [draggedCatIndex, setDraggedCatIndex] = useState<number | null>(null);
   const [draggedItemIndex, setDraggedItemIndex] = useState<number | null>(null);
@@ -25,20 +29,51 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, config, onSa
   useEffect(() => {
     if (isOpen) {
         const mergedConfig = JSON.parse(JSON.stringify(config));
-        // Ensure proxy is set if missing (backward compatibility)
-        if (!mergedConfig.corsProxy && mergedConfig.apiProvider === 'modelscope') {
-            mergedConfig.corsProxy = DEFAULT_CONFIG.corsProxy;
+        // Ensure keys/endpoints objects exist
+        if (!mergedConfig.keys) mergedConfig.keys = {};
+        if (!mergedConfig.endpoints) mergedConfig.endpoints = {};
+        // Backward compatibility
+        if (mergedConfig.userApiKey && Object.keys(mergedConfig.keys).length === 0) {
+             // If user had a key but no specific keys, assume it was for the selected provider
+             mergedConfig.keys[mergedConfig.apiProvider] = mergedConfig.userApiKey;
         }
+        
         setLocalConfig(mergedConfig);
+        setVerifying({}); // Reset verification status
     }
   }, [isOpen, config]);
 
   if (!isOpen) return null;
 
-  // Determine if we have a key (either entered by user or from env)
-  const envApiKey = typeof process !== 'undefined' && process.env ? process.env.API_KEY : '';
-  const effectiveKey = localConfig.userApiKey || envApiKey;
-  const hasEffectiveKey = !!effectiveKey;
+  // --- Handlers ---
+  
+  const handleVerify = async (provider: ApiProvider) => {
+      const key = localConfig.keys[provider];
+      if (!key) return;
+
+      setVerifying(prev => ({ ...prev, [provider]: 'verifying' }));
+      
+      const endpoint = localConfig.endpoints[provider];
+      const isSuccess = await verifyConnection(provider, key, endpoint, localConfig.corsProxy);
+      
+      setVerifying(prev => ({ ...prev, [provider]: isSuccess ? 'success' : 'error' }));
+  };
+
+  const handleKeyChange = (provider: ApiProvider, val: string) => {
+      setLocalConfig(prev => ({
+          ...prev,
+          keys: { ...prev.keys, [provider]: val }
+      }));
+      // Reset verification status on change
+      setVerifying(prev => ({ ...prev, [provider]: 'idle' }));
+  };
+  
+  const handleEndpointChange = (provider: ApiProvider, val: string) => {
+      setLocalConfig(prev => ({
+          ...prev,
+          endpoints: { ...prev.endpoints, [provider]: val }
+      }));
+  };
 
   const handleAddCategory = () => {
     if (!newCatName.trim()) return;
@@ -83,7 +118,7 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, config, onSa
     onClose();
   };
 
-  // --- Drag & Drop Handlers for Categories ---
+  // --- Drag & Drop Handlers ---
   const handleCatDragStart = (index: number) => { setDraggedCatIndex(index); };
   const handleCatDragOver = (e: React.DragEvent) => { e.preventDefault(); };
   const handleCatDrop = (dropIndex: number) => {
@@ -98,7 +133,6 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, config, onSa
     setDraggedCatIndex(null);
   };
 
-  // --- Drag & Drop Handlers for Items ---
   const handleItemDragStart = (index: number) => { setDraggedItemIndex(index); };
   const handleItemDragOver = (e: React.DragEvent) => { e.preventDefault(); };
   const handleItemDrop = (dropIndex: number) => {
@@ -114,14 +148,22 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, config, onSa
 
   const activeCategory = localConfig.categories[selectedCatIndex];
   
-  const getKeyLabel = (p: ApiProvider) => {
+  const getProviderDetails = (p: ApiProvider) => {
      switch(p) {
-         case 'gemini': return 'Google AI Studio API Key';
-         case 'huggingface': return 'Hugging Face Token (Optional)';
-         case 'modelscope': return 'ModelScope Access Token (Required)';
-         default: return 'API Key';
+         case 'gemini': return { label: 'Google AI Studio Key', url: 'https://aistudio.google.com/app/apikey' };
+         case 'huggingface': return { label: 'Hugging Face Token', url: 'https://huggingface.co/settings/tokens' };
+         case 'modelscope': return { label: 'ModelScope Access Token', url: 'https://modelscope.cn/my/myaccesstoken' };
+         case 'nvidia': return { label: 'NVIDIA API Key', url: 'https://build.nvidia.com/settings/api-keys' };
+         case 'aliyun': return { label: 'Aliyun DashScope Key', url: 'https://bailian.console.aliyun.com/' };
+         case 'qiniu': return { label: 'Qiniu API Key', url: 'https://portal.qiniu.com/ai-inference/api-key' };
+         default: return { label: 'API Key', url: '#' };
      }
   };
+
+  const activeProviderId = localConfig.apiProvider;
+  const providerDetails = getProviderDetails(activeProviderId);
+  const currentKey = localConfig.keys[activeProviderId] || '';
+  const verifyState = verifying[activeProviderId] || 'idle';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -293,153 +335,197 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, config, onSa
 
             {/* --- Tab: Environment --- */}
             {activeTab === 'env' && (
-               <div className="flex-1 p-8 bg-white overflow-y-auto custom-scrollbar">
-                 <div className="max-w-2xl mx-auto space-y-6">
-                   
-                   {/* 1. API Selection */}
-                   <div className="bg-white border border-brand-200 rounded-xl p-6 shadow-sm">
-                      <h4 className="font-bold text-brand-800 flex items-center gap-2 mb-4">
-                        <Cpu size={18} /> 模型服务商 (API Provider)
-                      </h4>
-                      <div className="grid grid-cols-3 gap-3">
-                        <button
-                          onClick={() => setLocalConfig(prev => ({ ...prev, apiProvider: 'gemini' }))}
-                          className={`p-3 rounded-xl border-2 transition-all flex flex-col gap-1 items-center text-center ${
-                            localConfig.apiProvider === 'gemini' 
-                            ? 'border-brand-400 bg-brand-50 text-brand-800' 
-                            : 'border-gray-100 bg-white hover:border-brand-200 text-gray-500'
-                          }`}
-                        >
-                          <span className="font-bold text-sm">Google Gemini</span>
-                          <span className="text-[10px] opacity-70">Imagen 4.0</span>
-                        </button>
+               <div className="flex-1 flex flex-col bg-white overflow-hidden">
+                 {/* Provider Selector Strip */}
+                 <div className="flex border-b border-brand-100 overflow-x-auto p-2 gap-2 bg-brand-50/50">
+                    {[
+                      { id: 'gemini', name: 'Google Gemini' },
+                      { id: 'huggingface', name: 'Hugging Face' },
+                      { id: 'modelscope', name: 'ModelScope' },
+                      { id: 'nvidia', name: 'NVIDIA' },
+                      { id: 'aliyun', name: 'Aliyun Wanx' },
+                      { id: 'qiniu', name: 'Qiniu / OpenAI' },
+                    ].map((provider) => {
+                       const isConfigured = !!localConfig.keys[provider.id as ApiProvider];
+                       const pStatus = verifying[provider.id] || 'idle';
+                       
+                       return (
+                          <button
+                             key={provider.id}
+                             onClick={() => setLocalConfig(prev => ({ ...prev, apiProvider: provider.id as ApiProvider }))}
+                             className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all flex items-center gap-2 ${
+                               localConfig.apiProvider === provider.id 
+                               ? 'bg-white shadow-sm text-brand-800 ring-1 ring-brand-200' 
+                               : 'text-gray-500 hover:bg-brand-100/50 hover:text-brand-600'
+                             }`}
+                           >
+                             {provider.name}
+                             {/* Small Dot Status Indicator */}
+                             {pStatus === 'success' ? (
+                               <div className="w-2 h-2 rounded-full bg-green-500" />
+                             ) : isConfigured && pStatus !== 'error' ? (
+                               <div className="w-2 h-2 rounded-full bg-brand-200" />
+                             ) : null}
+                           </button>
+                       );
+                    })}
+                 </div>
 
-                        <button
-                          onClick={() => setLocalConfig(prev => ({ ...prev, apiProvider: 'huggingface' }))}
-                          className={`p-3 rounded-xl border-2 transition-all flex flex-col gap-1 items-center text-center ${
-                            localConfig.apiProvider === 'huggingface' 
-                            ? 'border-brand-400 bg-brand-50 text-brand-800' 
-                            : 'border-gray-100 bg-white hover:border-brand-200 text-gray-500'
-                          }`}
-                        >
-                          <span className="font-bold text-sm">Hugging Face</span>
-                          <span className="text-[10px] opacity-70">Z-Image (Gradio)</span>
-                        </button>
-
-                        <button
-                          onClick={() => setLocalConfig(prev => ({ ...prev, apiProvider: 'modelscope' }))}
-                          className={`p-3 rounded-xl border-2 transition-all flex flex-col gap-1 items-center text-center ${
-                            localConfig.apiProvider === 'modelscope' 
-                            ? 'border-brand-400 bg-brand-50 text-brand-800' 
-                            : 'border-gray-100 bg-white hover:border-brand-200 text-gray-500'
-                          }`}
-                        >
-                          <span className="font-bold text-sm">ModelScope</span>
-                          <span className="text-[10px] opacity-70">魔搭 Z-Image</span>
-                        </button>
-                      </div>
-                   </div>
-
-                   {/* 2. API Key Configuration */}
-                   <div className="bg-white border border-brand-200 rounded-xl p-6 shadow-sm">
-                      <h4 className="font-bold text-brand-800 flex items-center gap-2 mb-4">
-                        <Key size={18} /> API 密钥配置
-                      </h4>
-                      
-                      <div className="space-y-4">
-                        <div className="flex flex-col gap-2">
-                           <label className="text-sm font-semibold text-gray-700">
-                             {getKeyLabel(localConfig.apiProvider)}
-                           </label>
-                           <input 
-                              type="password" 
-                              value={localConfig.userApiKey}
-                              onChange={(e) => setLocalConfig(prev => ({ ...prev, userApiKey: e.target.value }))}
-                              placeholder={localConfig.apiProvider === 'gemini' ? "在此输入您的 API Key 以覆盖默认设置" : "请输入您的 Access Token"}
-                              className="w-full px-4 py-3 rounded-lg border border-brand-200 focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm font-mono bg-gray-50"
-                           />
+                 {/* Configuration Form */}
+                 <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
+                   <div className="max-w-2xl mx-auto space-y-6">
+                     
+                     {/* 1. Header with Status */}
+                     <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-3">
+                           <div className={`p-2 rounded-lg ${verifyState === 'success' ? 'bg-green-100 text-green-600' : 'bg-brand-100 text-brand-600'}`}>
+                             {verifyState === 'verifying' ? <Loader2 className="animate-spin" size={24} /> : <Cpu size={24} />}
+                           </div>
+                           <div>
+                             <h3 className="font-bold text-lg text-gray-800">{providerDetails.label.split(' ')[0]} 设置</h3>
+                             <p className="text-xs text-gray-500">配置该服务商的 API 凭证</p>
+                           </div>
                         </div>
+                        <a 
+                          href={providerDetails.url} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="text-xs text-brand-500 hover:text-brand-700 flex items-center gap-1 bg-brand-50 px-3 py-1.5 rounded-full border border-brand-100"
+                        >
+                          <Link size={12} /> 获取密钥
+                        </a>
+                     </div>
 
-                        {/* Status Indicator */}
-                        <div className={`flex items-center gap-2 text-sm p-3 rounded-lg ${
-                            (localConfig.apiProvider === 'huggingface' || hasEffectiveKey) ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'
-                        }`}>
-                           {(localConfig.apiProvider === 'huggingface' || hasEffectiveKey) ? <CheckCircle size={16} /> : <AlertTriangle size={16} />}
-                           <span>
-                             {localConfig.apiProvider === 'huggingface' && !hasEffectiveKey 
-                               ? 'HF 模式可尝试免费使用，但建议配置 Token 以获得更稳定体验。' 
-                               : hasEffectiveKey 
-                                 ? (localConfig.userApiKey ? '使用用户自定义 Token/Key' : '使用系统环境变量 Key')
-                                 : '未检测到 Token，请在上方输入'}
-                           </span>
+                     {/* 2. Key Input */}
+                     <div className="space-y-3">
+                        <label className="text-sm font-semibold text-gray-700 block">
+                           API Key / Token
+                        </label>
+                        <div className="flex gap-2">
+                          <div className="relative flex-1">
+                             <input 
+                                type="password" 
+                                value={currentKey}
+                                onChange={(e) => handleKeyChange(activeProviderId, e.target.value)}
+                                placeholder={`请输入 ${activeProviderId} 的密钥...`}
+                                className={`w-full pl-4 pr-10 py-3 rounded-lg border focus:outline-none focus:ring-2 text-sm font-mono transition-all ${
+                                   verifyState === 'error' 
+                                   ? 'border-red-300 focus:ring-red-200 bg-red-50' 
+                                   : verifyState === 'success'
+                                     ? 'border-green-300 focus:ring-green-200 bg-green-50'
+                                     : 'border-brand-200 focus:ring-brand-400 bg-white'
+                                }`}
+                             />
+                             {verifyState === 'success' && (
+                               <CheckCircle size={18} className="absolute right-3 top-3.5 text-green-500" />
+                             )}
+                          </div>
+                          <button
+                            onClick={() => handleVerify(activeProviderId)}
+                            disabled={!currentKey || verifyState === 'verifying'}
+                            className={`px-4 rounded-lg font-medium text-sm flex items-center gap-2 transition-all ${
+                              verifyState === 'success' 
+                              ? 'bg-green-100 text-green-700 hover:bg-green-200' 
+                              : 'bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 disabled:bg-gray-300'
+                            }`}
+                          >
+                             {verifyState === 'verifying' ? <Loader2 className="animate-spin" size={16} /> : <Play size={16} />}
+                             {verifyState === 'verifying' ? '连接中' : '测试连接'}
+                          </button>
                         </div>
-                      </div>
-                   </div>
-
-                   {/* 3. CORS Proxy Configuration (Only for ModelScope) */}
-                   {localConfig.apiProvider === 'modelscope' && (
-                     <div className="bg-white border border-brand-200 rounded-xl p-6 shadow-sm animate-in fade-in">
-                        <h4 className="font-bold text-brand-800 flex items-center gap-2 mb-4">
-                          <Network size={18} /> 跨域代理 (CORS Proxy)
-                        </h4>
-                        <div className="space-y-2">
-                           <p className="text-xs text-gray-500 mb-2">
-                             ModelScope API 需要 CORS 代理。已为您内置默认代理，您也可以修改它。
+                        
+                        {/* Status Message */}
+                        {verifyState === 'error' && (
+                           <p className="text-xs text-red-500 flex items-center gap-1 animate-in slide-in-from-top-1">
+                             <AlertTriangle size={12} /> 连接失败，请检查网络或密钥是否正确 (401/403/Failed to fetch)
                            </p>
+                        )}
+                        {verifyState === 'success' && (
+                           <p className="text-xs text-green-600 flex items-center gap-1 animate-in slide-in-from-top-1">
+                             <CheckCircle size={12} /> 连接验证通过，API 可用
+                           </p>
+                        )}
+                     </div>
+
+                     {/* 3. Endpoint (Conditional) */}
+                     {(activeProviderId === 'qiniu' || activeProviderId === 'gemini' || localConfig.endpoints[activeProviderId]) && (
+                        <div className="space-y-2 pt-2 border-t border-dashed border-gray-200">
+                           <div className="flex justify-between items-center">
+                              <label className="text-sm font-semibold text-gray-700">自定义 Endpoint</label>
+                              <span className="text-[10px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded">可选</span>
+                           </div>
                            <input 
                               type="text" 
-                              value={localConfig.corsProxy || ''}
-                              onChange={(e) => setLocalConfig(prev => ({ ...prev, corsProxy: e.target.value }))}
-                              placeholder={DEFAULT_CONFIG.corsProxy}
+                              value={localConfig.endpoints[activeProviderId] || ''}
+                              onChange={(e) => handleEndpointChange(activeProviderId, e.target.value)}
+                              placeholder={activeProviderId === 'qiniu' ? "https://api.openai.com/v1" : "默认地址"}
                               className="w-full px-4 py-3 rounded-lg border border-brand-200 focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm font-mono bg-gray-50"
                            />
-                           <p className="text-xs text-brand-500">
-                             当前默认: <code>{DEFAULT_CONFIG.corsProxy}</code>
+                           <p className="text-xs text-gray-400">
+                             如果使用中转服务或自定义代理，请在此配置完整 URL 前缀。
                            </p>
                         </div>
-                     </div>
-                   )}
+                     )}
 
-                   {/* 4. Advanced Settings (Z-Image / ModelScope) */}
-                   {(localConfig.apiProvider === 'huggingface' || localConfig.apiProvider === 'modelscope') && (
-                     <div className="bg-white border border-brand-200 rounded-xl p-6 shadow-sm animate-in fade-in slide-in-from-bottom-2">
-                        <h4 className="font-bold text-brand-800 flex items-center gap-2 mb-4">
-                          <Settings2 size={18} /> 高级参数 (Z-Image)
-                        </h4>
-                        <div className="grid grid-cols-2 gap-6">
-                           <div className="space-y-2">
-                             <div className="flex justify-between">
-                               <label className="text-sm font-semibold text-gray-700">迭代步数 (Steps)</label>
-                               <span className="text-xs font-mono bg-brand-100 text-brand-800 px-2 py-0.5 rounded">{localConfig.steps || 8}</span>
-                             </div>
+                     {/* 4. CORS (ModelScope only) */}
+                     {activeProviderId === 'modelscope' && (
+                       <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 shadow-sm">
+                          <h4 className="font-bold text-blue-800 flex items-center gap-2 mb-2 text-sm">
+                            <Network size={16} /> 浏览器跨域设置
+                          </h4>
+                          <div className="space-y-2">
                              <input 
-                               type="range" 
-                               min="1" max="50" 
-                               value={localConfig.steps || 8}
-                               onChange={(e) => setLocalConfig(prev => ({ ...prev, steps: parseInt(e.target.value) }))}
-                               className="w-full accent-brand-500 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                                type="text" 
+                                value={localConfig.corsProxy || ''}
+                                onChange={(e) => setLocalConfig(prev => ({ ...prev, corsProxy: e.target.value }))}
+                                placeholder={DEFAULT_CONFIG.corsProxy}
+                                className="w-full px-3 py-2 rounded-lg border border-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-400 text-sm font-mono bg-white"
                              />
-                             <p className="text-xs text-gray-500">建议 4-8 步。HF/ModelScope 模式下生效。</p>
-                           </div>
+                             <p className="text-xs text-blue-600 opacity-80">
+                               ModelScope 网页端调用需要 CORS 代理，否则会报错 "Failed to fetch"。
+                             </p>
+                          </div>
+                       </div>
+                     )}
 
-                           <div className="space-y-2">
-                             <div className="flex justify-between">
-                               <label className="text-sm font-semibold text-gray-700">时间偏移 (Time Shift)</label>
-                               <span className="text-xs font-mono bg-brand-100 text-brand-800 px-2 py-0.5 rounded">{localConfig.timeShift || 3.0}</span>
-                             </div>
-                             <input 
-                               type="number" 
-                               step="0.1"
-                               value={localConfig.timeShift || 3.0}
-                               onChange={(e) => setLocalConfig(prev => ({ ...prev, timeShift: parseFloat(e.target.value) }))}
-                               className="w-full px-3 py-2 rounded-lg border border-brand-200 text-sm"
-                             />
-                             <p className="text-xs text-gray-500">仅 HF 模式生效。默认 3.0。</p>
+                     {/* 5. Advanced Z-Image Params */}
+                     {(activeProviderId === 'huggingface' || activeProviderId === 'modelscope') && (
+                        <div className="pt-4 border-t border-brand-100 mt-4">
+                           <h4 className="font-bold text-gray-700 flex items-center gap-2 mb-4 text-sm">
+                             <Settings2 size={16} /> 模型参数 (Z-Image)
+                           </h4>
+                           <div className="grid grid-cols-2 gap-6">
+                              <div className="space-y-2">
+                                <div className="flex justify-between">
+                                  <label className="text-xs font-semibold text-gray-600">迭代步数 (Steps)</label>
+                                  <span className="text-xs font-mono bg-gray-100 text-gray-800 px-2 py-0.5 rounded">{localConfig.steps || 8}</span>
+                                </div>
+                                <input 
+                                  type="range" 
+                                  min="1" max="50" 
+                                  value={localConfig.steps || 8}
+                                  onChange={(e) => setLocalConfig(prev => ({ ...prev, steps: parseInt(e.target.value) }))}
+                                  className="w-full accent-brand-500 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <div className="flex justify-between">
+                                  <label className="text-xs font-semibold text-gray-600">时间偏移 (Time Shift)</label>
+                                  <span className="text-xs font-mono bg-gray-100 text-gray-800 px-2 py-0.5 rounded">{localConfig.timeShift || 3.0}</span>
+                                </div>
+                                <input 
+                                  type="number" 
+                                  step="0.1"
+                                  value={localConfig.timeShift || 3.0}
+                                  onChange={(e) => setLocalConfig(prev => ({ ...prev, timeShift: parseFloat(e.target.value) }))}
+                                  className="w-full px-3 py-2 rounded-lg border border-brand-200 text-sm"
+                                />
+                              </div>
                            </div>
                         </div>
-                     </div>
-                   )}
+                     )}
 
+                   </div>
                  </div>
                </div>
             )}

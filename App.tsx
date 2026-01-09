@@ -10,9 +10,11 @@ import {
   AlertCircle,
   X,
   Zap,
-  Globe
+  Globe,
+  Cpu,
+  Cloud
 } from 'lucide-react';
-import { Config, Resolution, GenerationState } from './types';
+import { Config, Resolution, GenerationState, ApiProvider } from './types';
 import { DEFAULT_CONFIG, STATIC_PROMPT_SUFFIX, RESOLUTIONS } from './constants';
 import ConfigModal from './components/ConfigModal';
 import { enhancePromptWithGemini, generateImage } from './services/generationService';
@@ -25,8 +27,26 @@ const App: React.FC = () => {
       const saved = localStorage.getItem('app_config');
       if (saved) {
         try {
-          // Merge saved config with default to ensure new fields exist
-          return { ...DEFAULT_CONFIG, ...JSON.parse(saved) };
+          const parsed = JSON.parse(saved);
+          
+          // MIGRATION LOGIC: Convert old single-key config to multi-key
+          // Check if it has the old 'userApiKey' field and missing 'keys'
+          if ('userApiKey' in parsed && !parsed.keys) {
+             const newConfig = { ...DEFAULT_CONFIG, ...parsed };
+             newConfig.keys = {};
+             // Migrate the old key to the provider that was selected
+             if (parsed.userApiKey) {
+                 newConfig.keys[parsed.apiProvider as ApiProvider] = parsed.userApiKey;
+             }
+             delete newConfig.userApiKey; // Cleanup
+             return newConfig;
+          }
+
+          // Merge with default to ensure new fields (endpoints, keys map) exist
+          return { ...DEFAULT_CONFIG, ...parsed, 
+             keys: { ...DEFAULT_CONFIG.keys, ...(parsed.keys || {}) },
+             endpoints: { ...DEFAULT_CONFIG.endpoints, ...(parsed.endpoints || {}) }
+          };
         } catch (e) { console.error(e); }
       }
     }
@@ -152,7 +172,7 @@ const App: React.FC = () => {
       } else if (detailedMsg.includes("HF API Error")) {
         userMsg = "Hugging Face 服务暂时不可用，请重试。";
       } else if (detailedMsg.includes("ModelScope")) {
-        userMsg = "ModelScope 任务失败，请检查 Token 或网络。";
+        userMsg = "ModelScope 连接失败，请检查设置中的“CORS代理”。";
       } else {
         userMsg = detailedMsg.slice(0, 100);
       }
@@ -175,14 +195,23 @@ const App: React.FC = () => {
     }
   };
 
-  const getProviderName = () => {
+  const getProviderLabel = () => {
       switch(config.apiProvider) {
-          case 'gemini': return 'Google Gemini';
-          case 'huggingface': return 'Z-Image Turbo';
-          case 'modelscope': return 'ModelScope (魔搭)';
-          default: return '';
+          case 'gemini': return { name: 'Google Gemini', icon: <Cpu size={10} />, color: 'bg-blue-100 text-blue-700' };
+          case 'huggingface': return { name: 'Z-Image Turbo', icon: <Zap size={10} />, color: 'bg-yellow-100 text-yellow-700' };
+          case 'modelscope': return { name: 'ModelScope', icon: <Globe size={10} />, color: 'bg-purple-100 text-purple-700' };
+          case 'nvidia': return { name: 'NVIDIA NIM', icon: <Cpu size={10} />, color: 'bg-green-100 text-green-700' };
+          case 'aliyun': return { name: 'Aliyun Wanx', icon: <Cloud size={10} />, color: 'bg-orange-100 text-orange-700' };
+          case 'qiniu': return { name: 'Qiniu AI', icon: <Cloud size={10} />, color: 'bg-cyan-100 text-cyan-700' };
+          default: return { name: 'AI', icon: <Zap size={10} />, color: 'bg-gray-100 text-gray-700' };
       }
   };
+  
+  const providerInfo = getProviderLabel();
+  // Check if current provider has a key configured in the new structure
+  const currentProviderKey = config.keys?.[config.apiProvider];
+  // Gemini can fallback to env var
+  const hasKey = !!currentProviderKey || (config.apiProvider === 'gemini' && !!process.env.API_KEY);
 
   // Helper to parse aspect ratio for UI display
   const getAspectRatioStyle = () => {
@@ -210,11 +239,9 @@ const App: React.FC = () => {
             <h1 className="font-bold text-xl text-brand-800 tracking-tight">AI 毛衣设计师</h1>
           </div>
           {config.apiProvider !== 'gemini' && (
-             <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold flex items-center gap-1 ${
-                 config.apiProvider === 'modelscope' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'
-             }`}>
-               {config.apiProvider === 'modelscope' ? <Globe size={10} /> : <Zap size={10} />}
-               {config.apiProvider === 'modelscope' ? '魔搭' : 'HF'}
+             <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold flex items-center gap-1 ${providerInfo.color}`}>
+               {providerInfo.icon}
+               {providerInfo.name}
              </span>
           )}
         </div>
@@ -258,12 +285,12 @@ const App: React.FC = () => {
           <div className="h-px bg-brand-200/50 w-full" />
 
           {/* Technical Settings */}
-          <div className="space-y-6">
+          <div className="space-y-8 pb-4">
             <h2 className="text-sm font-bold uppercase tracking-wider text-brand-400">画布设置</h2>
             
             <div className="space-y-2">
               <label className="text-sm font-semibold text-brand-700">画幅尺寸</label>
-              <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto custom-scrollbar p-1">
+              <div className="grid grid-cols-2 gap-2 p-1">
                 {RESOLUTIONS.map((res) => (
                   <button
                     key={res.value}
@@ -282,14 +309,14 @@ const App: React.FC = () => {
             </div>
 
             <div className="space-y-2">
-               <label className="text-sm font-semibold text-brand-700">种子数值</label>
+               <label className="text-sm font-semibold text-brand-700">种子数值 (Seed)</label>
                <div className="flex gap-2">
                  <input
                    type="number"
                    value={seedInput}
                    onChange={(e) => setSeedInput(e.target.value)}
                    disabled={isRandomSeed}
-                   className={`flex-1 bg-white border border-brand-200 text-brand-800 py-2 px-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm ${isRandomSeed ? 'opacity-50' : ''}`}
+                   className={`flex-1 bg-white border border-brand-200 text-brand-800 py-2 px-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm font-mono ${isRandomSeed ? 'opacity-50' : ''}`}
                  />
                  <button
                    onClick={() => setIsRandomSeed(!isRandomSeed)}
@@ -313,8 +340,8 @@ const App: React.FC = () => {
             className="w-full py-3 flex items-center justify-center gap-2 text-brand-600 font-medium hover:text-brand-800 hover:bg-brand-100 rounded-xl transition-colors relative group"
           >
             <Settings size={18} /> 
-            <span>维度与 API 配置</span>
-            {!config.userApiKey && !process.env.API_KEY && config.apiProvider !== 'huggingface' && (
+            <span>API 服务配置</span>
+            {!hasKey && config.apiProvider !== 'huggingface' && (
               <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-pulse border-2 border-white"></span>
             )}
           </button>
@@ -360,7 +387,7 @@ const App: React.FC = () => {
                     <Palette size={64} className="mb-4 opacity-50" />
                     <p className="font-medium">准备生成</p>
                     <p className="text-sm mt-2 opacity-70">
-                      当前使用: {getProviderName()}
+                      当前使用: {providerInfo.name}
                     </p>
                    </>
                  )}

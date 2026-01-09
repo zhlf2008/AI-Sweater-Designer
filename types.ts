@@ -4,14 +4,16 @@ export interface Category {
   items: string[];
 }
 
-export type ApiProvider = 'gemini' | 'huggingface' | 'modelscope';
+export type ApiProvider = 'gemini' | 'huggingface' | 'modelscope' | 'nvidia' | 'aliyun' | 'qiniu';
 
 export interface Config {
   categories: Category[];
   apiProvider: ApiProvider;
-  userApiKey: string; // User entered API Key
-  corsProxy: string; // CORS Proxy URL for ModelScope
-  // Advanced settings for Z-Image/HF
+  // Deprecated: userApiKey: string; 
+  // New structure for multi-provider support
+  keys: Partial<Record<ApiProvider, string>>;
+  endpoints: Partial<Record<ApiProvider, string>>; 
+  corsProxy: string; 
   steps: number;
   timeShift: number;
 }
@@ -34,3 +36,5 @@ export interface AppState {
   isRandomSeed: boolean;
   selections: Record<string, string>;
 }
+
+export type VerificationStatus = 'idle' | 'verifying' | 'success' | 'error';

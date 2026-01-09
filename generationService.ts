@@ -3,7 +3,7 @@ import { Config, Resolution } from "./types";
 
 // Helper to get the effective API Key (User Input > Env Var)
 const getApiKey = (config: Config) => {
-  return config.userApiKey || process.env.API_KEY || "";
+  return config.keys?.[config.apiProvider] || process.env.API_KEY || "";
 };
 
 // --- Gemini Implementation ---

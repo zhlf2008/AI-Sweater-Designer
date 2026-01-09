@@ -1,11 +1,88 @@
 import { GoogleGenAI } from "@google/genai";
-import { Config, Resolution } from "../types";
+import { Config, Resolution, ApiProvider } from "../types";
 
-// Helper to get the effective API Key (User Input > Env Var)
-const getApiKey = (config: Config) => {
-  const envKey = (typeof process !== 'undefined' && process.env) ? process.env.API_KEY : "";
-  return config.userApiKey || envKey || "";
+// Helper to get the effective API Key (Specific Provider Key > Env Var)
+const getApiKey = (config: Config, providerOverride?: ApiProvider) => {
+  const provider = providerOverride || config.apiProvider;
+  // Check specific key for this provider first
+  if (config.keys && config.keys[provider]) {
+    return config.keys[provider] || "";
+  }
+  // Fallback to global env only if strictly necessary (usually discouraged for multi-provider)
+  if (provider === 'gemini') {
+    return process.env.API_KEY || "";
+  }
+  return "";
 };
+
+// --- Verification Logic ---
+
+export const verifyConnection = async (provider: ApiProvider, key: string, endpoint?: string, proxy?: string): Promise<boolean> => {
+  if (!key) return false;
+
+  try {
+    switch (provider) {
+      case 'gemini': {
+        const ai = new GoogleGenAI({ apiKey: key });
+        // Use a lightweight call (countTokens or simple generate)
+        await ai.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: 'test',
+        });
+        return true;
+      }
+      case 'huggingface': {
+        // Check user status or validity of token
+        const res = await fetch('https://huggingface.co/api/whoami-v2', {
+          headers: { Authorization: `Bearer ${key}` }
+        });
+        return res.status === 200;
+      }
+      case 'modelscope': {
+        // Attempt to access user info or a public model with the token
+        const baseUrl = "https://modelscope.cn/api/v1/user/my";
+        const url = proxy ? `${proxy}${baseUrl}` : baseUrl;
+        const res = await fetch(url, {
+          headers: { Authorization: `Bearer ${key}` }
+        });
+        // ModelScope returns 200 for valid token, 401 for invalid
+        return res.status === 200;
+      }
+      case 'nvidia': {
+         // Minimal fetch to check auth
+         const res = await fetch("https://api.nvidia.com/v1/genai/stabilityai/stable-diffusion-3.5-large", {
+            method: "POST", // Method not allowed is better than 401
+            headers: { Authorization: `Bearer ${key}` }
+         });
+         // 401/403 means auth failed. 400/405/422 usually means auth passed but payload invalid (which is fine for connection test)
+         return res.status !== 401 && res.status !== 403;
+      }
+      case 'aliyun': {
+        // List models or check simple endpoint (DashScope)
+        // Hard to verify without spending credits, but we can check if the key format is rejected
+        const res = await fetch("https://dashscope.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis", {
+           method: "POST",
+           headers: { Authorization: `Bearer ${key}` }
+        });
+        return res.status !== 401 && res.status !== 403;
+      }
+      case 'qiniu': {
+        // OpenAI Compatible "List Models"
+        const url = endpoint ? `${endpoint.replace(/\/$/, '')}/models` : "https://api.openai.com/v1/models";
+        const res = await fetch(url, {
+           headers: { Authorization: `Bearer ${key}` }
+        });
+        return res.status === 200;
+      }
+      default:
+        return false;
+    }
+  } catch (e) {
+    console.error(`Verification failed for ${provider}:`, e);
+    return false;
+  }
+};
+
 
 // --- Gemini Implementation ---
 
@@ -16,22 +93,19 @@ const getGeminiClient = (apiKey: string) => {
 
 export const enhancePromptWithGemini = async (basePrompt: string, config: Config): Promise<string> => {
   try {
-    const apiKey = getApiKey(config);
-    if (config.apiProvider !== 'gemini') return basePrompt;
+    const apiKey = getApiKey(config, 'gemini');
+    // Allow enhancing even if current provider is not gemini, as long as gemini key exists
     if (!apiKey) return basePrompt; 
 
     const ai = getGeminiClient(apiKey);
     
-    // Limit base prompt to reasonable length before enhancement
-    const safePrompt = basePrompt.slice(0, 500);
-
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: `你是一位专业的时尚摄影师和AI绘画提示词专家。
       请优化以下毛衣设计提示词，加入高质量的艺术关键词、光影描述和材质细节，使其适合生成逼真的照片。
       请保持在80字以内。
       
-      输入提示词: "${safePrompt}"
+      输入提示词: "${basePrompt}"
       
       要求：
       1. 请使用中文输出。
@@ -50,7 +124,6 @@ export const enhancePromptWithGemini = async (basePrompt: string, config: Config
 const generateWithGemini = async (prompt: string, resolution: Resolution, apiKey: string): Promise<string> => {
     const ai = getGeminiClient(apiKey);
     
-    // Map resolution to supported aspect ratios for Imagen
     let aspectRatio = "1:1";
     if (resolution.includes("3:4") || resolution === "864x1152") aspectRatio = "3:4";
     else if (resolution.includes("4:3") || resolution === "1152x864") aspectRatio = "4:3";
@@ -181,16 +254,9 @@ const generateWithModelScope = async (
     const apiKey = getApiKey(config);
     if (!apiKey) throw new Error("ModelScope API Token is missing. Please configure it in Settings.");
 
-    // Fix resolution format for ModelScope (Standard usually expects "1024*1024")
-    // Ensure it is strictly in standard format, removing any extra whitespace
-    const modelScopeResolution = resolution.replace('x', '*').trim();
-
-    // Use built-in fallback if config is empty
-    const proxy = (config.corsProxy && config.corsProxy.trim()) ? config.corsProxy.trim() : "https://corsproxy.io/?";
-    const targetUrl = "https://api-inference.modelscope.cn/v1/images/generations";
-    
-    // Construct URL safely with encoding to prevent "Origin DNS error"
-    const url = `${proxy}${encodeURIComponent(targetUrl)}`;
+    const proxy = config.corsProxy || "";
+    const baseUrl = "https://api-inference.modelscope.cn/v1/images/generations";
+    const url = proxy ? `${proxy}${baseUrl}` : baseUrl;
 
     try {
         const response = await fetch(url, {
@@ -204,11 +270,10 @@ const generateWithModelScope = async (
             body: JSON.stringify({
                 model: "Tongyi-MAI/Z-Image-Turbo",
                 input: {
-                    // Truncate prompt to avoid 400 error (ModelScope limit is 2000, setting to 1024 to be safe)
-                    prompt: prompt ? prompt.slice(0, 1024).trim() : "Sweater design"
+                    prompt: prompt
                 },
                 parameters: {
-                    size: modelScopeResolution, 
+                    size: resolution,
                     n: 1,
                     seed: seed 
                 }
@@ -217,26 +282,12 @@ const generateWithModelScope = async (
 
         if (!response.ok) {
             const errText = await response.text();
-            
-            if (response.status === 403 || response.status === 404 || errText.includes("DNS")) {
-                 throw new Error("Proxy Error: Unable to connect to ModelScope via Proxy. Please check your network or try a different proxy in settings.");
-            }
-            
-            throw new Error(`ModelScope Error (${response.status}): ${errText.slice(0, 200)}`);
+            throw new Error(`ModelScope Error (${response.status}): ${errText}`);
         }
 
         const data = await response.json();
-        
-        // Handle direct synchronous return
-        if (data.output && data.output.results && data.output.results[0] && data.output.results[0].url) {
-             return data.output.results[0].url;
-        }
-
         const taskId = data.task_id;
-        if (!taskId) {
-            if (data.output_images && data.output_images.length > 0) return data.output_images[0];
-            throw new Error("Failed to start ModelScope task: No task_id returned.");
-        }
+        if (!taskId) throw new Error("Failed to start ModelScope task: No task_id returned.");
 
         // Poll for status
         let attempts = 0;
@@ -244,8 +295,7 @@ const generateWithModelScope = async (
             await new Promise(r => setTimeout(r, 2000));
             
             const taskBaseUrl = `https://api-inference.modelscope.cn/v1/tasks/${taskId}`;
-            // Construct task URL with proxy as well
-            const taskUrl = `${proxy}${encodeURIComponent(taskBaseUrl)}`;
+            const taskUrl = proxy ? `${proxy}${taskBaseUrl}` : taskBaseUrl;
 
             const taskRes = await fetch(taskUrl, {
                 method: "GET",
@@ -276,11 +326,155 @@ const generateWithModelScope = async (
         throw new Error("ModelScope generation timed out.");
     } catch (e: any) {
         if (e.name === 'TypeError' && e.message === 'Failed to fetch') {
-            throw new Error("Network Error: 连接被拦截. ModelScope 必须使用代理 (已内置 https://corsproxy.io/?). 请检查网络连接.");
+            throw new Error("ModelScope 连接被浏览器拦截 (CORS)。请在设置中配置 'CORS 代理' (如 https://corsproxy.io/?) 来解决此问题。");
         }
         throw e;
     }
 };
+
+// --- NVIDIA Implementation ---
+
+const generateWithNvidia = async (prompt: string, resolution: Resolution, seed: number, config: Config): Promise<string> => {
+    const apiKey = getApiKey(config);
+    if (!apiKey) throw new Error("NVIDIA API Key is missing. Please configure it in Settings.");
+
+    // Using Stable Diffusion 3.5 Large as standard high-quality model
+    const url = "https://ai.api.nvidia.com/v1/genai/stabilityai/stable-diffusion-3.5-large";
+    
+    // NVIDIA payload structure
+    const payload = {
+        text_prompts: [{ text: prompt, weight: 1 }],
+        cfg_scale: 5,
+        sampler: "K_EULER_ANCESTRAL",
+        seed: seed,
+        steps: 30
+    };
+
+    const response = await fetch(url, {
+        method: "POST",
+        headers: {
+            "Authorization": `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        },
+        body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`NVIDIA API Error (${response.status}): ${text.slice(0, 200)}`);
+    }
+
+    const data = await response.json();
+    if (data.artifacts && data.artifacts.length > 0) {
+        return `data:image/jpeg;base64,${data.artifacts[0].base64}`;
+    }
+    throw new Error("No image returned from NVIDIA.");
+};
+
+// --- Aliyun (Wanx) Implementation ---
+
+const generateWithAliyun = async (prompt: string, resolution: Resolution, seed: number, config: Config): Promise<string> => {
+    const apiKey = getApiKey(config);
+    if (!apiKey) throw new Error("Aliyun API Key is missing.");
+
+    // Parse resolution to W*H format for Aliyun
+    const size = resolution.replace('x', '*');
+
+    const url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis";
+    
+    const response = await fetch(url, {
+        method: "POST",
+        headers: {
+            "Authorization": `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+            "X-DashScope-Async": "enable"
+        },
+        body: JSON.stringify({
+            model: "wanx-v1",
+            input: {
+                prompt: prompt
+            },
+            parameters: {
+                style: "<auto>",
+                size: size,
+                n: 1,
+                seed: seed
+            }
+        })
+    });
+
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Aliyun Error (${response.status}): ${text}`);
+    }
+
+    const data = await response.json();
+    const taskId = data.output?.task_id;
+    if (!taskId) throw new Error("Failed to start Aliyun task.");
+
+    // Polling
+    let attempts = 0;
+    while (attempts < 60) {
+        await new Promise(r => setTimeout(r, 2000));
+        const taskUrl = `https://dashscope.aliyuncs.com/api/v1/tasks/${taskId}`;
+        const taskRes = await fetch(taskUrl, {
+            headers: { "Authorization": `Bearer ${apiKey}` }
+        });
+        
+        if (taskRes.ok) {
+            const taskData = await taskRes.json();
+            const status = taskData.output?.task_status;
+            
+            if (status === 'SUCCEEDED') {
+                const url = taskData.output?.results?.[0]?.url;
+                if (url) return url;
+            } else if (status === 'FAILED') {
+                throw new Error(`Aliyun task failed: ${taskData.output?.message}`);
+            }
+        }
+        attempts++;
+    }
+    throw new Error("Aliyun generation timed out.");
+};
+
+// --- Qiniu / OpenAI Compatible Implementation ---
+
+const generateWithOpenAICompatible = async (prompt: string, resolution: Resolution, seed: number, config: Config): Promise<string> => {
+    const apiKey = getApiKey(config);
+    if (!apiKey) throw new Error("API Key is missing.");
+    
+    const endpoint = config.endpoints?.[config.apiProvider] || "https://api.openai.com/v1/images/generations";
+
+    const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+            "Authorization": `Bearer ${apiKey}`,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            prompt: prompt,
+            model: "dall-e-3", // Default model, user might need to change if backend differs
+            n: 1,
+            size: resolution, 
+            response_format: "b64_json"
+        })
+    });
+
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`API Error (${response.status}): ${text}`);
+    }
+
+    const data = await response.json();
+    if (data.data && data.data.length > 0) {
+        const item = data.data[0];
+        if (item.b64_json) return `data:image/png;base64,${item.b64_json}`;
+        if (item.url) return item.url;
+    }
+    throw new Error("No image data returned from API.");
+};
+
 
 export const generateImage = async (
     prompt: string, 
@@ -295,6 +489,12 @@ export const generateImage = async (
             return await generateWithHuggingFace(prompt, resolution, seed, config);
         case 'modelscope':
             return await generateWithModelScope(prompt, resolution, seed, config);
+        case 'nvidia':
+            return await generateWithNvidia(prompt, resolution, seed, config);
+        case 'aliyun':
+            return await generateWithAliyun(prompt, resolution, seed, config);
+        case 'qiniu':
+            return await generateWithOpenAICompatible(prompt, resolution, seed, config);
         case 'gemini':
         default:
             if (!apiKey) throw new Error("Google Gemini API Key is missing.");
